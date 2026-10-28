@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Natitirang Oras ng WiFi</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#2563eb">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:'Segoe UI',Roboto,Arial,sans-serif;background:#f3f5f8;color:#0f172a;padding:16px;display:flex;justify-content:center}
+#box{width:100%;max-width:420px}
+h1{font-size:20px;margin:6px 0 14px;text-align:center}
+.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 0 0 1px #e8edf3;margin-bottom:14px}
+label{font-size:13px;color:#5b6b7e}
+input{width:100%;height:48px;border:1px solid #cbd5e1;border-radius:10px;padding:0 12px;font-size:18px;letter-spacing:2px;margin:6px 0 10px}
+button{font:inherit;cursor:pointer}
+.btn{width:100%;height:48px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-size:16px;font-weight:700}
+.btn:disabled{opacity:.5;cursor:default}
+.btn2{width:100%;border:1px solid #cbd5e1;background:#fff;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:8px}
+#time{font-size:54px;font-weight:800;text-align:center;margin:6px 0;font-variant-numeric:tabular-nums}
+#pkg{text-align:center;color:#5b6b7e;font-size:14px}
+#stat{margin-top:10px;padding:12px;border-radius:10px;text-align:center;font-weight:700}
+.ok{background:#d9f2e0;color:#1e6b34}
+.warn{background:#fff4c2;color:#8a6100}
+.bad{background:#fde2e2;color:#b91c1c}
+.pulse{animation:p 1s infinite}
+@keyframes p{50%{opacity:.45}}
+.small{font-size:12px;color:#5b6b7e;margin-top:8px;line-height:1.5}
+#res{display:none}
+#msg{display:none;margin-bottom:14px;padding:12px;border-radius:10px;font-weight:600}
+</style>
+</head>
+<body>
+<div id="box">
+<h1>Natitirang Oras ng WiFi</h1>
+<div class="card">
+<label for="code">Ilagay ang voucher code mo</label>
+<input id="code" type="text" maxlength="20" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Voucher code">
+<button id="go" class="btn" type="button">Tingnan ang oras</button>
+</div>
+<div id="msg"></div>
+<div id="res">
+<div class="card">
+<div id="pkg"></div>
+<div id="time">--:--</div>
+<div id="stat" class="ok">Naglo-load...</div>
+<div id="stale" class="small"></div>
+</div>
+<div class="card">
+<div id="pstate" class="small" style="margin:0 0 10px"></div>
+<button id="pon" class="btn" type="button">I-on ang abiso</button>
+<button id="ptest" class="btn2" type="button">Subukan ang notification</button>
+<div class="small">Makakatanggap ka ng abiso sa phone kapag malapit nang maubos ang oras mo, kahit naka-lock ang screen o sarado ang browser.</div>
+</div>
+</div>
+</div>
+<script>
+const APPS = "https://script.google.com/macros/s/AKfycbwWIRQVc2vGUhezr3cmOhd5RN_m7hnyZE-Zo5fwxzEfgxvYGI4vRwLWbEQEBluCY5Le/exec";
+const VAPID = "BB1gHSijkoxMVKvl1LslWjTYrxRcA2NsABnKbgPxY8vPagniLZRpHcL7G-3zh0LrIUZVJJS2RjJfgm-vQ7jh16o";
+let D = null, fetchedAt = 0, CODE = '', subbed = {};
+
+function $(id){ return document.getElementById(id); }
+function p2(n){ return (n < 10 ? '0' : '') + n; }
+function clk(sec){
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  return (h ? h + ':' : '') + p2(m) + ':' + p2(s);
+}
+function put(k, v){ try { localStorage.setItem(k, v); } catch (e) {} }
+function get(k){ try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } }
+function setMsg(t, cls){
+  const m = $('msg');
+  if (!t) { m.style.display = 'none'; return; }
+  m.textContent = t; m.className = cls || 'warn'; m.style.display = 'block';
+}
+function isIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent); }
+function standalone(){
+  return window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+function pushOK(){ return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window); }
+function b64u(s){
+  const pad = '='.repeat((4 - s.length % 4) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  const a = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) a[i] = raw.charCodeAt(i);
+  return a;
+}
+function updPush(){
+  let t = '', can = true;
+  $('pon').textContent = 'I-on ang abiso';
+  if (!pushOK()) {
+    can = false;
+    t = (isIOS() && !standalone())
+      ? 'Sa iPhone: pindutin ang Share, piliin ang Add to Home Screen, buksan ang app mula sa Home Screen, at doon i-on ang abiso.'
+      : 'Hindi sinusuportahan ng browser na ito ang push notification. Subukan ang Chrome.';
+  } else if (Notification.permission === 'denied') {
+    t = 'Naka-block ang notification sa browser. Payagan ito sa Site settings, tapos i-refresh ang pahina.';
+  } else if (Notification.permission === 'granted' && subbed[CODE]) {
+    t = 'Naka-on ang abiso para sa code na ito.';
+    $('pon').textContent = 'Naka-on na';
+  } else {
+    t = 'Hindi pa naka-on ang abiso.';
+  }
+  $('pstate').textContent = t;
+  $('pon').disabled = !can || !!subbed[CODE];
+}
+function sendSub(sub){
+  return fetch(APPS, {
+    method: 'POST',
+    headers: {'Content-Type': 'text/plain;charset=utf-8'},
+    body: JSON.stringify({action: 'subscribe', code: CODE, sub: sub.toJSON()})
+  }).then(function(r){ return r.json(); }).then(function(j){
+    if (j.ok) { subbed[CODE] = true; setMsg(''); }
+    else if (j.error === 'notfound') setMsg('Hindi pa nakikita ang voucher na ito bilang ginagamit. Maghintay ng 30 segundo at pindutin ulit.', 'warn');
+    else if (j.error === 'busy') setMsg('Maraming sumusubok ngayon. Subukan ulit pagkalipas ng isang minuto.', 'warn');
+    else setMsg('Hindi na-save ang abiso. Subukan ulit.', 'bad');
+    updPush();
+  }).catch(function(){ setMsg('Hindi makakonekta para i-save ang abiso. Subukan ulit.', 'bad'); });
+}
+async function enablePush(){
+  if (!CODE) { setMsg('Ilagay muna ang voucher code.', 'warn'); return; }
+  if (!pushOK()) { updPush(); return; }
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { updPush(); return; }
+    const reg = await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: b64u(VAPID)});
+    await sendSub(sub);
+  } catch (e) {
+    setMsg('Hindi na-on ang abiso: ' + (e && e.message ? e.message : e), 'bad');
+  }
+}
+async function autoSub(){
+  if (!pushOK() || Notification.permission !== 'granted' || subbed[CODE]) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sendSub(sub);
+  } catch (e) {}
+}
+async function testNote(){
+  try {
+    if (!pushOK() || Notification.permission !== 'granted') { updPush(); setMsg('I-on muna ang abiso.', 'warn'); return; }
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) { setMsg('I-on muna ang abiso.', 'warn'); return; }
+    await reg.showNotification('WiFi Rental', {body: 'Ganito lalabas ang abiso kapag malapit nang maubos ang oras mo.'});
+  } catch (e) { setMsg('Hindi nagpakita ang notification: ' + e.message, 'bad'); }
+}
+
+function leftNow(){
+  if (!D) return 0;
+  return D.leftSec - ((D.serverNow - D.updatedAtMs) + (Date.now() - fetchedAt)) / 1000;
+}
+function tick(){
+  if (!D) return;
+  const left = leftNow(), st = $('stat');
+  $('time').textContent = clk(left);
+  $('stale').textContent = D.stale ? 'Posibleng hindi tumpak ang oras dahil walang bagong update mula sa sistema.' : '';
+  if (left <= 0) { st.className = 'bad'; st.textContent = 'Tapos na ang oras mo. Bumili ng bagong voucher para magpatuloy.'; return; }
+  if (left <= 60) { st.className = 'bad pulse'; st.textContent = 'Wala pang 1 minuto! Malapit nang maubos ang oras mo.'; }
+  else if (left <= 300) { st.className = 'warn'; st.textContent = 'Malapit nang maubos ang oras mo.'; }
+  else { st.className = 'ok'; st.textContent = 'May natitira ka pang oras.'; }
+}
+function got(d, silent){
+  if (d.busy) { if (!silent) setMsg('Maraming sumusubok ngayon. Subukan ulit pagkalipas ng isang minuto.', 'warn'); return; }
+  if (!d.found) {
+    if (silent && D) return;
+    D = null; $('res').style.display = 'none';
+    setMsg('Walang nakitang aktibong voucher sa code na ito. Kung kagagamit mo lang, maghintay ng 30 segundo at subukan ulit.', 'warn');
+    return;
+  }
+  if (d.expired) {
+    D = null; $('res').style.display = 'none';
+    setMsg('Tapos na ang oras ng voucher na ito. Bumili ng bagong voucher.', 'bad');
+    return;
+  }
+  setMsg('');
+  D = d; fetchedAt = Date.now();
+  $('pkg').textContent = d.pkg || '';
+  $('res').style.display = 'block';
+  tick(); updPush(); autoSub();
+}
+function check(silent){
+  const c = $('code').value.replace(/[^A-Za-z0-9]/g, '').slice(0, 20);
+  if (c.length < 4) { setMsg('Ilagay ang buong voucher code.', 'warn'); return; }
+  if (c !== CODE) D = null;
+  CODE = c; put('wcode', c);
+  if (!silent) $('go').disabled = true;
+  fetch(APPS + '?action=lookup&c=' + encodeURIComponent(c))
+    .then(function(r){ return r.json(); })
+    .then(function(d){ $('go').disabled = false; got(d, silent); })
+    .catch(function(){ $('go').disabled = false; if (!silent) setMsg('Hindi makakonekta. Subukan ulit.', 'bad'); });
+}
+
+$('go').onclick = function(){ check(false); };
+$('code').onkeydown = function(e){ if (e.key === 'Enter') check(false); };
+$('pon').onclick = enablePush;
+$('ptest').onclick = testNote;
+document.addEventListener('visibilitychange', function(){ if (!document.hidden && CODE) check(true); });
+try {
+  const q = new URLSearchParams(location.search).get('c');
+  if (q) $('code').value = q.replace(/[^A-Za-z0-9]/g, '').slice(0, 20);
+  else $('code').value = get('wcode');
+  if ($('code').value) check(false);
+} catch (e) {}
+updPush();
+setInterval(tick, 1000);
+setInterval(function(){ if (CODE && D) check(true); }, 60000);
+</script>
+</body>
+</html>
